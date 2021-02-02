@@ -27,6 +27,10 @@ public:
    #ifndef JucePlugin_PreferredChannelConfigurations
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
    #endif
+    
+    void updateParameters();
+    
+    float saturationTransfereFunction(float x);
 
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
@@ -52,8 +56,29 @@ public:
     //==============================================================================
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
+    
+    AudioProcessorValueTreeState apvts;
 
 private:
     //==============================================================================
+    float *pfCircularBuffer;
+    float fSR;
+    int iBufferSize;
+    int iBufferWritePos;
+    int iBufferReadPos;
+    float fDelSig = 0;
+    float fFeedbackGain;
+    float fDelayTime;
+    float fOut;
+    float saturationValue = 0.0f;
+    float saturation = 1.0f;
+    
+    OwnedArray<juce::dsp::FirstOrderTPTFilter<float>> lowPassFilter;
+    Random random;
+    
+    
+    
+    AudioProcessorValueTreeState::ParameterLayout createParameters();
+    
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FYPDelayProjectAudioProcessor)
 };

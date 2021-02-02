@@ -19,9 +19,11 @@ FYPDelayProjectAudioProcessor::FYPDelayProjectAudioProcessor()
                       #endif
                        .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
                      #endif
-                       )
+                       ) , apvts(*this, nullptr, "Parameters", createParameters())
 #endif
 {
+    lowPassFilter.add(new juce::dsp::FirstOrderTPTFilter<float>());
+    lowPassFilter[0]->setType(juce::dsp::FirstOrderTPTFilterType::lowpass);
 }
 
 FYPDelayProjectAudioProcessor::~FYPDelayProjectAudioProcessor()
@@ -95,6 +97,18 @@ void FYPDelayProjectAudioProcessor::prepareToPlay (double sampleRate, int sample
 {
     // Use this method as the place to do any pre-playback
     // initialisation that you need..
+    dsp::ProcessSpec spec;
+    fSR = 44100;
+    iBufferSize = (int)(2.0f * fSR);
+    pfCircularBuffer = new float[iBufferSize];
+    for (int x = 0; x<iBufferSize; x++)
+        pfCircularBuffer[x] = 0;
+    iBufferWritePos = 0;
+    fDelayTime = 0.8;
+    fFeedbackGain = 0.7;
+    lowPassFilter[0]->prepare(spec);
+    lowPassFilter[0]->reset();
+    lowPassFilter[0]->setCutoffFrequency(8000);
 }
 
 void FYPDelayProjectAudioProcessor::releaseResources()
@@ -129,6 +143,28 @@ bool FYPDelayProjectAudioProcessor::isBusesLayoutSupported (const BusesLayout& l
 }
 #endif
 
+void FYPDelayProjectAudioProcessor::updateParameters()
+{
+    fFeedbackGain = *apvts.getRawParameterValue("FEEDBACK");
+    fDelayTime = *apvts.getRawParameterValue("TIME");
+    saturation = *apvts.getRawParameterValue("SATURATION");
+}
+
+float FYPDelayProjectAudioProcessor::saturationTransfereFunction(float x)
+{
+    float y = 0.0f;
+    float coeffA = 2.0f;
+    if (x > 0.0f && x <= 1.0f)
+    {
+        y = (coeffA/(coeffA-1.0f))*(1.0f - pow(coeffA, -x));
+    }
+    else if (x <= 0.0f && x >= -1.0f)
+    {
+        y = (coeffA/(coeffA -1.0f))*(-1.0f + pow(coeffA, x));
+    }
+    return y;
+}
+
 void FYPDelayProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -150,11 +186,37 @@ void FYPDelayProjectAudioProcessor::processBlock (juce::AudioBuffer<float>& buff
     // the samples and the outer loop is handling the channels.
     // Alternatively, you can process the samples with the channels
     // interleaved by keeping the same state.
-    for (int channel = 0; channel < totalNumInputChannels; ++channel)
-    {
-        auto* channelData = buffer.getWritePointer (channel);
+    auto* channelData = buffer.getWritePointer (0);
 
-        // ..do something to the data...
+    for (int sample = 0; sample < buffer.getNumSamples(); sample++)
+    {
+        updateParameters();
+        
+        fDelSig = saturationTransfereFunction(fDelSig) + fDelSig;
+        if (fDelSig > 1)
+            fDelSig = 1;
+        else if (fDelSig < -1)
+            fDelSig = -1;
+        
+        fOut = fDelSig + channelData[sample];
+        iBufferWritePos++;
+        if (iBufferWritePos > (iBufferSize -1))
+            iBufferWritePos = 0;
+        pfCircularBuffer[iBufferWritePos] = fOut;
+        iBufferReadPos = iBufferWritePos - (fDelayTime * fSR);
+        if (iBufferReadPos < 0){
+            iBufferReadPos = (iBufferSize - (fDelayTime * fSR)) + iBufferWritePos;
+        }
+        else
+        {
+            iBufferReadPos = iBufferWritePos - (fDelayTime * fSR);
+        }
+            
+        if (iBufferReadPos > (iBufferSize -1 ))
+            iBufferReadPos = 0;
+        fDelSig = pfCircularBuffer[iBufferReadPos] * fFeedbackGain + (random.nextFloat() * 0.00025f - 0.000125f);
+        channelData[sample] = fOut;
+        buffer.copyFrom(1, 0, buffer, 0, 0, buffer.getNumSamples());
     }
 }
 
@@ -188,4 +250,22 @@ void FYPDelayProjectAudioProcessor::setStateInformation (const void* data, int s
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 {
     return new FYPDelayProjectAudioProcessor();
+}
+
+AudioProcessorValueTreeState::ParameterLayout FYPDelayProjectAudioProcessor::createParameters()
+{
+    std::vector<std::unique_ptr<RangedAudioParameter>> params;
+    params.push_back(std::make_unique<AudioParameterFloat>("FEEDBACK", "Feedback", 0.0f, 0.7f, 0.2f));
+    params.push_back(std::make_unique<AudioParameterFloat>("TIME", "Time", 0.0f, 0.8f, 0.5f));
+    params.push_back(std::make_unique<AudioParameterFloat>("SATURATION", "Saturation", 2.0f, 1000.0f, 2.0f));
+    /*
+    params.push_back(std::make_unique<AudioParameterFloat>("FEEDBACK", "Feedback", 0.0f, 0.99f, 0.8f));
+    params.push_back(std::make_unique<AudioParameterFloat>("VIBRATO", "Vibrato", 0.001f, 1.000f, 0.00f ));
+    params.push_back(std::make_unique<AudioParameterFloat>("DEPTH" , "Depth", 0.1f, 1.0f, 0.8f));
+    params.push_back(std::make_unique<AudioParameterFloat>("INPUT", "Input", 0.0f, .5f, 0.01f));
+    params.push_back(std::make_unique<AudioParameterFloat>("OUTPUT", "Ouput", 0.0f, 1.0f, 0.01f));
+     */
+    
+    
+    return {params.begin(), params.end() };
 }
